@@ -5,18 +5,39 @@
 //! Run the server a-like-a-so `cargo run --example simple -- -s`, then run the client
 //! as `cargo run --example simple` to see the magic happen.
 
+extern crate byteorder;
+extern crate bytes;
 extern crate clap;
+extern crate futures;
 #[macro_use]
 extern crate lazy_static;
 extern crate snow;
+extern crate tokio;
+extern crate tokio_core;
+extern crate tokio_io;
+
 
 use clap::App;
+use codec::MessageCodec;
+use futures::future::{self, Future};
+use futures::future::ok;
+use futures::Sink;
+use futures::Stream;
 use snow::NoiseBuilder;
 use snow::params::NoiseParams;
+use snow::Session;
+use std::error::Error as StdError;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::time::SystemTime;
+use tokio::prelude::*;
+use tokio_core::net;
+use tokio_core::reactor::Core;
+use tokio_io::AsyncRead;
+use tokio_io::codec::BytesCodec;
+
+mod codec;
 
 static SECRET: &'static [u8] = b"i don't care for fidget spinners";
 lazy_static! {
@@ -42,55 +63,86 @@ fn run_server() {
     // Initialize our responder NoiseSession using a builder.
     let builder: NoiseBuilder = NoiseBuilder::new(PARAMS.clone());
     let static_key = builder.generate_private_key().unwrap();
-    let mut noise = builder
+    let mut noise: Session = builder
         .local_private_key(&static_key)
         .psk(3, SECRET)
-        .build_responder()
-        .unwrap();
+        .build_responder().unwrap();
 
     // Wait on our client's arrival...
     println!("listening on 127.0.0.1:9999");
-    let (mut stream, _) = TcpListener::bind("127.0.0.1:9999")
-        .unwrap()
-        .accept()
-        .unwrap();
+    {
+        let listener = TcpListener::bind("127.0.0.1:9999").unwrap();
+        {
+            let (mut stream, _) = listener.accept().unwrap();
 
-    // <- e
-    println!("read <-e");
-    noise
-        .read_message(&recv(&mut stream).unwrap(), &mut buf)
-        .unwrap();
+            // <- e
+            noise.read_message(&recv(&mut stream).unwrap(), &mut buf).unwrap();
 
-    println!("write -> e, ee, s, es");
-    // -> e, ee, s, es
-    let len = noise.write_message(&[0u8; 0], &mut buf).unwrap();
-    send(&mut stream, &buf[..len]);
+            // -> e, ee, s, es
+            let len = noise.write_message(&[0u8; 0], &mut buf).unwrap();
+            send(&mut stream, &buf[..len]);
 
-    println!("read <- s, se, time {:?}", SystemTime::now());
-    // <- s, se
+            // <- s, se
+            noise.read_message(&recv(&mut stream).unwrap(), &mut buf).unwrap();
 
-        let mut msg_len_buf = vec![0u8; 64];
-        println!("read exact...");
+            // Transition the state machine into transport mode now that the handshake is complete.
 
-        stream.read_to_end(&mut msg_len_buf).unwrap();
 
-        let msg_len_buf:Vec<u8> = msg_len_buf.iter().filter(|&&b| b > 0).map(|b| *b).skip(1).collect();
-//        let msg = &recv(&mut stream);
-    println!("loop msg {:?}", msg_len_buf);
+//    let fut = future::result(fut_stream);
+        }
 
-    noise
-        .read_message(msg_len_buf.as_ref(), &mut buf)
-        .unwrap();
+//    while let Ok(msg) = recv(&mut stream) {
+//        let len = noise.read_message(&msg, &mut buf).unwrap();
+//        println!("client said: {}", String::from_utf8_lossy(&buf[..len]));
+//    }
 
-    println!("Transport mode!");
-    // Transition the state machine into transport mode now that the handshake is complete.
-    let mut noise = noise.into_transport_mode().unwrap();
+        let mut core = Core::new().unwrap();
+        let handle = core.handle();
 
-    while let Ok(msg) = recv(&mut stream) {
-        let len = noise.read_message(&msg, &mut buf).unwrap();
-        println!("client said: {}", String::from_utf8_lossy(&buf[..len]));
+
+        let fut_stream = tokio_core::net::TcpListener::from_listener(listener, &"127.0.0.1:9999".parse().unwrap(), &handle).unwrap();
+        let fut = fut_stream.incoming()
+            .map_err(|e| println!("failed to accept socket; error = {:?}", e))
+            .for_each(move |s| {
+//            noise_message(&mut noise);
+
+                let mut noise: Session = noise.into_transport_mode().unwrap();
+                let (sink, stream) =
+                    s.0.framed(MessageCodec::new(noise)).split();
+//
+//                let connection_handler = stream
+//                    .into_future()
+//                    .map_err(|e| e.0)
+//                    .and_then(move |(raw, stream)| {
+//                        println!("raw {:?}", raw);
+//                        Ok((raw, stream))
+//                    })
+//                    .map_err(log_error)
+//                    .and_then(|x| {
+//                        ok(())
+//                    });
+//
+//
+//            handle.spawn(connection_handler);
+
+                ok(())
+            });
+
+
+        core.run(fut).unwrap();
     }
+
     println!("connection closed.");
+}
+
+pub fn log_error<E: StdError>(err: E) {
+    println!("An error occurred: {}", err)
+}
+
+fn respond(req: Vec<u8>)
+           -> Box<Future<Item=(), Error=io::Error>>
+{
+    Box::new(future::ok(()))
 }
 
 fn run_client() {
@@ -130,6 +182,18 @@ fn run_client() {
         let len = noise.write_message(b"HACK THE PLANET", &mut buf).unwrap();
         send(&mut stream, &buf[..len]);
     }
+
+    let mut core = Core::new().unwrap();
+    let handle = core.handle();
+
+    let fut_steam = tokio_core::net::TcpStream::from_stream(stream, &handle);
+    let fut = future::result(fut_steam).and_then(|x| {
+        println!("stream {:?}", x);
+        ok(())
+    });
+
+    core.run(fut).unwrap();
+
     println!("notified server of intent to hack planet.");
 }
 

@@ -1,30 +1,34 @@
+extern crate byteorder;
+extern crate bytes;
 extern crate clap;
+extern crate futures;
 #[macro_use]
 extern crate lazy_static;
 extern crate snow;
+extern crate tokio;
 extern crate tokio_core;
 extern crate tokio_io;
-extern crate futures;
-extern crate tokio;
 
 use clap::App;
+use futures::future::Future;
+use futures::Sink;
+use futures::Stream;
 use snow::NoiseBuilder;
 use snow::params::NoiseParams;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use tokio_io::{AsyncRead, codec::LinesCodec};
 use std::net::SocketAddr;
-use futures::future::Future;
-use tokio_core::reactor::Core;
-use futures::Stream;
-use futures::Sink;
+use std::thread;
 use tokio::prelude::future::ok;
-use tokio_io::codec::BytesCodec;
+use tokio_core::reactor::Core;
+use tokio_io::{AsyncRead, codec::LinesCodec};
+use std::time::SystemTime;
 
 static SECRET: &'static [u8] = b"i don't care for fidget spinners";
 lazy_static! {
     static ref PARAMS: NoiseParams = "Noise_XXpsk3_25519_ChaChaPoly_BLAKE2s".parse().unwrap();
 }
+
 
 fn main() {
     let matches = App::new("simple")
@@ -99,7 +103,7 @@ fn send_message(message: &str, addr: &SocketAddr) {
 
     let mut stream = tokio_core::net::TcpStream::connect(&addr, &handle)
         .and_then(|sock| {
-            println!("connected to {:?}", sock);
+            println!("connected to {:?}, time {:?}", sock, SystemTime::now());
             let mut buf = vec![0u8; 65535];
 
             // -> e
@@ -111,36 +115,59 @@ fn send_message(message: &str, addr: &SocketAddr) {
                     let socket = sock.0;
                     println!("second read, buf len {:?}", sock.1[1]);
                     let buf_len = sock.1[1] as usize;
-                    let mut buf = vec![0u8; buf_len];
+                    let mut size_buf = vec![0, 0];
+                    let mut buf = vec![0u8; 98];
+
+                    println!("read_to_end, buf len {:?}", buf.len());
                     tokio::io::read_exact(socket, buf)
                 })
                 .and_then(|sock| {
-
                     let len = sock.1[1] as usize;
-                    println!("second NOISE read, buf len {:?}, readed {:?}", len, sock.1);
+                    println!("second NOISE read, buf len {:?}, buf {:?}", len, sock.1);
                     let mut buf = vec![0u8; 65535];
 
+                    let mut buf_to_read = &sock.1[2..len + 2];
+                    println!("buf to read {:?}", buf_to_read);
                     // <- e, ee, s, es
                     noise
-                        .read_message(&sock.1, &mut buf)
+                        .read_message(&buf_to_read, &mut buf)
                         .unwrap();
 
-                    println!("second NOISE write");
+                    println!("second NOISE write, time {:?}", SystemTime::now());
                     let mut buf = vec![0u8; 65535];
                     let len = noise.write_message(&[], &mut buf).unwrap();
 
-                    tokio::io::write_all(sock.0, buf)
+                    let mut msg_len_buf = vec![(len >> 8) as u8, (len & 0xff) as u8];
+                    let buf = &buf[0..len];
+                    msg_len_buf.extend_from_slice(buf);
+                    println!("second NOISE writte buf {:?},", buf);
+                    tokio::io::write_all(sock.0, msg_len_buf)
                         .and_then(|sock| {
+                            println!("second NOISE written buf {:?}, time {:?}", sock.1, SystemTime::now());
                             let mut noise = noise.into_transport_mode().unwrap();
-                            println!("transport mode!");
+
+                            let mut buf = vec![0u8; 65535];
+                            let len = noise.write_message(b"HACK THE PLANET", &mut buf).unwrap();
+
+                            let mut msg_len_buf = vec![(len >> 8) as u8, (len & 0xff) as u8];
+                            let buf = &buf[0..len];
+                            msg_len_buf.extend_from_slice(buf);
+//                            tokio::io::write_all(sock.0, msg_len_buf).and_then(|sock| {
+//                                println!("transport message!");
+//                                ok(())
+//                            })
                             ok(())
                         })
-//                    ok(())
+                })
+                .then(|x| {
+                    ok(())
                 })
         })
         .map_err(|e| eprintln!("Error: {}", e));
 
     core.run(stream).unwrap();
+
+    thread::sleep_ms(1000);
 }
 
 /// Hyper-basic stream transport receiver. 16-bit BE size followed by payload.
