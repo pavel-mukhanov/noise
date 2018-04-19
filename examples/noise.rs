@@ -37,7 +37,6 @@ use tokio_core::reactor::Core;
 use tokio_io::AsyncRead;
 use tokio_io::codec::BytesCodec;
 
-mod codec;
 
 static SECRET: &'static [u8] = b"i don't care for fidget spinners";
 lazy_static! {
@@ -63,33 +62,34 @@ fn run_server() {
     // Initialize our responder NoiseSession using a builder.
     let builder: NoiseBuilder = NoiseBuilder::new(PARAMS.clone());
     let static_key = builder.generate_private_key().unwrap();
-    let mut noise: Session = builder
+    let noise: Session = builder
         .local_private_key(&static_key)
         .psk(3, SECRET)
         .build_responder().unwrap();
 
     // Wait on our client's arrival...
-    println!("listening on 127.0.0.1:9999");
-    {
+//    println!("listening on 127.0.0.1:9999");
+//    {
         let listener = TcpListener::bind("127.0.0.1:9999").unwrap();
-        {
-            let (mut stream, _) = listener.accept().unwrap();
+//        {
 
-            // <- e
-            noise.read_message(&recv(&mut stream).unwrap(), &mut buf).unwrap();
-
-            // -> e, ee, s, es
-            let len = noise.write_message(&[0u8; 0], &mut buf).unwrap();
-            send(&mut stream, &buf[..len]);
-
-            // <- s, se
-            noise.read_message(&recv(&mut stream).unwrap(), &mut buf).unwrap();
-
-            // Transition the state machine into transport mode now that the handshake is complete.
-
-
-//    let fut = future::result(fut_stream);
-        }
+//            let (mut stream, _) = listener.accept().unwrap();
+//
+//            // <- e
+//            noise.read_message(&recv(&mut stream).unwrap(), &mut buf).unwrap();
+//
+//            // -> e, ee, s, es
+//            let len = noise.write_message(&[0u8; 0], &mut buf).unwrap();
+//            send(&mut stream, &buf[..len]);
+//
+//            // <- s, se
+//            noise.read_message(&recv(&mut stream).unwrap(), &mut buf).unwrap();
+//
+//            // Transition the state machine into transport mode now that the handshake is complete.
+//
+//
+////    let fut = future::result(fut_stream);
+//        }
 
 //    while let Ok(msg) = recv(&mut stream) {
 //        let len = noise.read_message(&msg, &mut buf).unwrap();
@@ -100,15 +100,17 @@ fn run_server() {
         let handle = core.handle();
 
 
+
         let fut_stream = tokio_core::net::TcpListener::from_listener(listener, &"127.0.0.1:9999".parse().unwrap(), &handle).unwrap();
         let fut = fut_stream.incoming()
             .map_err(|e| println!("failed to accept socket; error = {:?}", e))
-            .for_each(move |s| {
+            .for_each(|s| {
 //            noise_message(&mut noise);
-
-                let mut noise: Session = noise.into_transport_mode().unwrap();
-                let (sink, stream) =
-                    s.0.framed(MessageCodec::new(noise)).split();
+//                let codec = MessageCodec::new(noise);
+//
+//                let  noise: Session = noise.into_transport_mode().unwrap();
+//                let (sink, stream) =
+//                    s.0.framed(codec).split();
 //
 //                let connection_handler = stream
 //                    .into_future()
@@ -130,7 +132,7 @@ fn run_server() {
 
 
         core.run(fut).unwrap();
-    }
+//    }
 
     println!("connection closed.");
 }

@@ -69,12 +69,12 @@ fn run_server() {
     println!("read <- s, se, time {:?}", SystemTime::now());
     // <- s, se
 
-        let mut msg_len_buf = vec![0u8; 64];
-        println!("read exact...");
+    let mut msg_len_buf = vec![0u8; 64];
+    println!("read exact...");
 
-        stream.read_to_end(&mut msg_len_buf).unwrap();
+    stream.read_to_end(&mut msg_len_buf).unwrap();
 
-        let msg_len_buf:Vec<u8> = msg_len_buf.iter().filter(|&&b| b > 0).map(|b| *b).skip(1).collect();
+    let msg_len_buf: Vec<u8> = msg_len_buf.iter().filter(|&&b| b > 0).map(|b| *b).skip(1).collect();
 //        let msg = &recv(&mut stream);
     println!("loop msg {:?}", msg_len_buf);
 
@@ -85,6 +85,11 @@ fn run_server() {
     println!("Transport mode!");
     // Transition the state machine into transport mode now that the handshake is complete.
     let mut noise = noise.into_transport_mode().unwrap();
+
+//    for _ in 0..10 {
+//        let len = noise.write_message(b"HACK THE PLANET", &mut buf).unwrap();
+//        send(&mut stream, &buf[..len]);
+//    }
 
     while let Ok(msg) = recv(&mut stream) {
         let len = noise.read_message(&msg, &mut buf).unwrap();
@@ -114,8 +119,17 @@ fn run_client() {
     send(&mut stream, &buf[..len]);
 
     // <- e, ee, s, es
+    let mut msg_len_buf = vec![0u8; 64];
+    println!("read exact...");
+
+    stream.read_to_end(&mut msg_len_buf).unwrap();
+
+    let msg_len_buf: Vec<u8> = msg_len_buf.iter().filter(|&&b| b > 0).map(|b| *b).skip(1).collect();
+//        let msg = &recv(&mut stream);
+    println!("loop msg {:?}", msg_len_buf);
+
     noise
-        .read_message(&recv(&mut stream).unwrap(), &mut buf)
+        .read_message(msg_len_buf.as_ref(), &mut buf)
         .unwrap();
 
     // -> s, se

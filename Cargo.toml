@@ -28,6 +28,7 @@ tokio-io = "0.1.6"
 clap = "2.31.2"
 lazy_static = "1.0.0"
 bytes = "0.4.6"
+tokio-service = "0.1"
 
 
 [dev-dependencies]

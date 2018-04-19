@@ -2,7 +2,6 @@ use bytes::BytesMut;
 use byteorder::{ByteOrder, LittleEndian};
 use tokio_io::codec::{Decoder, Encoder};
 use snow::Session;
-use snow::transportstate::TransportState;
 
 use std::io;
 
@@ -18,13 +17,20 @@ impl  MessageCodec {
 }
 
 impl Decoder for MessageCodec {
-    type Item = Vec<u8>;
+    type Item = String;
     type Error = io::Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
 
-        println!("buf {:?}", buf);
-        Ok(None)
+        let data = buf.split_to(2).to_vec();
+        println!("buf {:?}", data);
+
+        let mut read_to = vec![0u8; 65535];
+
+        let len = self.session.read_message(&buf, &mut read_to).unwrap();
+
+        let res =  String::from_utf8_lossy(&read_to[..len]);
+        Ok(Some(res.to_string()))
     }
 }
 
