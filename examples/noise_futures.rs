@@ -29,6 +29,7 @@ use tokio_service::{Service, NewService};
 use tokio::io::WriteAll;
 use tokio::io::ReadExact;
 use futures::stream::AndThen;
+use tokio::executor::current_thread;
 
 mod codec;
 
@@ -62,59 +63,8 @@ fn run_server() {
     let fut = fut_stream.incoming()
         .map_err(|e| println!("failed to accept socket; error = {:?}", e))
         .for_each(|sock| {
-            let builder: NoiseBuilder = NoiseBuilder::new(PARAMS.clone());
-            let static_key = builder.generate_private_key().unwrap();
-            let mut noise = builder
-                .local_private_key(&static_key)
-                .psk(3, SECRET)
-                .build_responder()
-                .unwrap();
-
-            let reader =
-                read(sock.0)
-                    .and_then(move |s| {
-                        let mut buf = vec![0u8; 65535];
-
-                        // <- e
-                        noise
-                            .read_message(&s.1, &mut buf);
-
-                        // -> e, ee, s, es
-                        let len = noise.write_message(&[0u8; 0], &mut buf).unwrap();
-
-                        write(s.0, buf, len)
-                            .and_then(|s| {
-                                read(s.0)
-                            })
-                            .and_then(move |s| {
-                                let readed_buf = s.1;
-                                let mut buf = vec![0u8; 65535];
-                                // <- s, se
-                                noise.read_message(&readed_buf, &mut buf)
-                                    .unwrap();
-
-                                let mut noise = noise.into_transport_mode().unwrap();
-
-                                let (sink, stream) =
-                                    s.0.framed(MessageCodec::new(noise)).split();
-
-                                stream
-                                    .into_future()
-                                    .map_err(|e| e.0)
-                                    .and_then(|s| {
-                                        println!("client said: {:?}", s.0);
-                                        Ok((s.0, s.1))
-                                    })
-                                    .map_err(log_error)
-                                    .then(|s| {
-                                        Ok(())
-                                    })
-                            })
-                    })
-                    .then(|x| {
-                        Ok(())
-                    });
-            handle.spawn(to_box(reader));
+            let reader = noise_reader(sock.0);
+            handle.spawn(reader);
 
             Ok(())
         });
@@ -123,64 +73,127 @@ fn run_server() {
     println!("connection closed.");
 }
 
-fn noise_reader() {
-
-
-}
-
-
-fn to_box<F: Future + 'static>(f: F) -> Box<Future<Item=(), Error=F::Error>> {
-    Box::new(f.map(drop))
-}
-
 fn send_message(message: &str, addr: &SocketAddr) {
     let mut core = Core::new().unwrap();
     let handle = core.handle();
 
     let mut stream = tokio_core::net::TcpStream::connect(&addr, &handle)
         .and_then(|sock| {
-            let builder: NoiseBuilder = NoiseBuilder::new(PARAMS.clone());
-            let static_key = builder.generate_private_key().unwrap();
-            let mut noise = builder
-                .local_private_key(&static_key)
-                .psk(3, SECRET)
-                .build_initiator()
-                .unwrap();
-
-            println!("connected to {:?}, time {:?}", sock, SystemTime::now());
-            let mut buf = vec![0u8; 65535];
-            // -> e
-            let len = noise.write_message(&[], &mut buf).unwrap();
-            write(sock, buf, len)
-                .and_then(|sock| {
-                    read(sock.0)
-                })
-                .and_then(|sock| {
-                    let readed_buf = sock.1;
-                    println!("readed buf {:?}", readed_buf);
-                    let mut buf = vec![0u8; 65535];
-                    // <- e, ee, s, es
-                    noise
-                        .read_message(&readed_buf, &mut buf)
-                        .unwrap();
-
-                    let len = noise.write_message(&[], &mut buf).unwrap();
-                    let buf = &buf[0..len];
-                    write(sock.0, Vec::from(buf), len)
-                        .and_then(|sock| {
-                            let mut noise = noise.into_transport_mode().unwrap();
-                            let (sink, stream) =
-                                sock.0.framed(MessageCodec::new(noise)).split();
-                            sink.send(String::from("REALLY IMPORTANT ENCRYPTED MESSAGE"))
-                        })
-                })
-                .then(|x| {
-                    ok(())
-                })
-        })
-        .map_err(|e| eprintln!("Error: {}", e));
+            noise_writer(sock)
+        });
 
     core.run(stream).unwrap();
+}
+
+fn noise_reader(stream: TcpStream) -> Box<Future<Item=(), Error=()>> {
+    let builder: NoiseBuilder = NoiseBuilder::new(PARAMS.clone());
+    let static_key = builder.generate_private_key().unwrap();
+    let mut noise = builder
+        .local_private_key(&static_key)
+        .psk(3, SECRET)
+        .build_responder()
+        .unwrap();
+
+    let reader = read(stream)
+        .and_then(move |s| {
+            let mut buf = vec![0u8; 65535];
+
+            println!("READING MESSAGE");
+
+            // <- e
+            noise
+                .read_message(&s.1, &mut buf);
+
+            // -> e, ee, s, es
+            let len = noise.write_message(&[0u8; 0], &mut buf).unwrap();
+
+            write(s.0, buf, len)
+                .and_then(|s| {
+                    read(s.0)
+                })
+                .and_then(move |s| {
+                    let readed_buf = s.1;
+                    let mut buf = vec![0u8; 65535];
+                    // <- s, se
+                    noise.read_message(&readed_buf, &mut buf)
+                        .unwrap();
+
+                    let mut noise = noise.into_transport_mode().unwrap();
+
+                    let (sink, stream) =
+                        s.0.framed(MessageCodec::new(noise)).split();
+
+                    let conn = stream.for_each(|msg| {
+                        println!("Got a message from client {:?}", msg);
+                        Ok(())
+                    })
+                    .map_err(log_error)
+                        .then(|s| {
+                            Ok(())
+                        });
+
+                    current_thread::spawn(conn);
+
+                    Ok(())
+                })
+        })
+        .then(|x| {
+            Ok(())
+        });
+
+    Box::new(reader)
+}
+
+fn noise_writer(stream: TcpStream) -> Box<Future<Item=(), Error=io::Error>> {
+    let builder: NoiseBuilder = NoiseBuilder::new(PARAMS.clone());
+    let static_key = builder.generate_private_key().unwrap();
+    let mut noise = builder
+        .local_private_key(&static_key)
+        .psk(3, SECRET)
+        .build_initiator()
+        .unwrap();
+
+    println!("connected to {:?}, time {:?}", stream, SystemTime::now());
+    let mut buf = vec![0u8; 65535];
+    // -> e
+    let len = noise.write_message(&[], &mut buf).unwrap();
+    let writer
+    = write(stream, buf, len)
+        .and_then(|sock| {
+            read(sock.0)
+        })
+        .and_then(|sock| {
+            let readed_buf = sock.1;
+            let mut buf = vec![0u8; 65535];
+            // <- e, ee, s, es
+            noise
+                .read_message(&readed_buf, &mut buf)
+                .unwrap();
+
+            let len = noise.write_message(&[], &mut buf).unwrap();
+            let buf = &buf[0..len];
+            write(sock.0, Vec::from(buf), len)
+                .and_then(|sock| {
+                    let mut noise = noise.into_transport_mode().unwrap();
+                    let (sink, stream) =
+                        sock.0.framed(MessageCodec::new(noise)).split();
+                    sink.send(String::from("REALLY IMPORTANT ENCRYPTED MESSAGE"))
+                        .and_then(|sink| {
+                            sink.send(String::from("SECOND REALLY IMPORTANT ENCRYPTED MESSAGE"))
+                        })
+                        .and_then(|sink| {
+                            sink.send(String::from("THIRD REALLY IMPORTANT ENCRYPTED MESSAGE"))
+                        })
+                })
+        })
+        .then(|x| {
+            Ok(())
+        });
+    Box::new(writer)
+}
+
+fn to_box<F: Future + 'static>(f: F) -> Box<Future<Item=(), Error=F::Error>> {
+    Box::new(f.map(drop))
 }
 
 pub fn read(sock: tokio_core::net::TcpStream) -> Box<Future<Item=(TcpStream, Vec<u8>), Error=io::Error>> {
@@ -194,7 +207,6 @@ pub fn write(sock: TcpStream, buf: Vec<u8>, len: usize) -> Box<Future<Item=(TcpS
     let mut msg_len_buf = vec![(len >> 8) as u8, (len & 0xff) as u8];
     let buf = &buf[0..len];
     msg_len_buf.extend_from_slice(buf);
-    println!("write {:?}", msg_len_buf);
     Box::new(tokio::io::write_all(sock, msg_len_buf))
 }
 
