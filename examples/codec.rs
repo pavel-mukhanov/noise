@@ -35,10 +35,19 @@ impl Decoder for MessageCodec {
 }
 
 impl Encoder for MessageCodec {
-    type Item = Vec<u8>;
+    type Item = String;
     type Error = io::Error;
 
     fn encode(&mut self, msg: Self::Item, buf: &mut BytesMut) -> io::Result<()> {
+        let mut tmp_buf = vec![0u8; 65535];
+        let len = self.session.write_message(msg.as_bytes(), &mut tmp_buf).unwrap();
+
+        let mut msg_len_buf = vec![(len >> 8) as u8, (len & 0xff) as u8];
+        let tmp_buf = &tmp_buf[0..len];
+        msg_len_buf.extend_from_slice(tmp_buf);
+
+        buf.extend_from_slice(&msg_len_buf);
+
         Ok(())
     }
 }

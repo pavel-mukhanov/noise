@@ -17,12 +17,11 @@ use futures::Stream;
 use snow::NoiseBuilder;
 use snow::params::NoiseParams;
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
 use std::net::SocketAddr;
 use std::error::Error as StdError;
 use std::thread;
 use tokio::prelude::future::ok;
-use tokio_core::reactor::Core;
+use tokio_core::{reactor::Core, net::{TcpStream, TcpListener}};
 use tokio_io::{AsyncRead, codec::LinesCodec};
 use std::time::SystemTime;
 use codec::MessageCodec;
@@ -59,7 +58,7 @@ fn run_server() {
     let handle = core.handle();
     let remote = core.remote();
 
-    let fut_stream = tokio_core::net::TcpListener::bind(&"127.0.0.1:9999".parse().unwrap(), &handle).unwrap();
+    let fut_stream = TcpListener::bind(&"127.0.0.1:9999".parse().unwrap(), &handle).unwrap();
     let fut = fut_stream.incoming()
         .map_err(|e| println!("failed to accept socket; error = {:?}", e))
         .for_each(|sock| {
@@ -112,7 +111,6 @@ fn run_server() {
                                     })
                             })
                     })
-
                     .then(|x| {
                         Ok(())
                     });
@@ -125,6 +123,12 @@ fn run_server() {
     println!("connection closed.");
 }
 
+fn noise_reader() {
+
+
+}
+
+
 fn to_box<F: Future + 'static>(f: F) -> Box<Future<Item=(), Error=F::Error>> {
     Box::new(f.map(drop))
 }
@@ -133,17 +137,16 @@ fn send_message(message: &str, addr: &SocketAddr) {
     let mut core = Core::new().unwrap();
     let handle = core.handle();
 
-    // Initialize our initiator NoiseSession using a builder.
-    let builder: NoiseBuilder = NoiseBuilder::new(PARAMS.clone());
-    let static_key = builder.generate_private_key().unwrap();
-    let mut noise = builder
-        .local_private_key(&static_key)
-        .psk(3, SECRET)
-        .build_initiator()
-        .unwrap();
-
     let mut stream = tokio_core::net::TcpStream::connect(&addr, &handle)
         .and_then(|sock| {
+            let builder: NoiseBuilder = NoiseBuilder::new(PARAMS.clone());
+            let static_key = builder.generate_private_key().unwrap();
+            let mut noise = builder
+                .local_private_key(&static_key)
+                .psk(3, SECRET)
+                .build_initiator()
+                .unwrap();
+
             println!("connected to {:?}, time {:?}", sock, SystemTime::now());
             let mut buf = vec![0u8; 65535];
             // -> e
@@ -166,17 +169,9 @@ fn send_message(message: &str, addr: &SocketAddr) {
                     write(sock.0, Vec::from(buf), len)
                         .and_then(|sock| {
                             let mut noise = noise.into_transport_mode().unwrap();
-                            let mut buf = vec![0u8; 65535];
-                            let len = noise.write_message(b"FUTURES!", &mut buf).unwrap();
-
-                            let mut msg_len_buf = vec![(len >> 8) as u8, (len & 0xff) as u8];
-                            let buf = &buf[0..len];
-                            msg_len_buf.extend_from_slice(buf);
-                            println!("sent transport message {:?}", buf);
-                            tokio::io::write_all(sock.0, msg_len_buf).and_then(|sock| {
-                                println!("transport message!");
-                                ok(())
-                            })
+                            let (sink, stream) =
+                                sock.0.framed(MessageCodec::new(noise)).split();
+                            sink.send(String::from("REALLY IMPORTANT ENCRYPTED MESSAGE"))
                         })
                 })
                 .then(|x| {
@@ -188,14 +183,14 @@ fn send_message(message: &str, addr: &SocketAddr) {
     core.run(stream).unwrap();
 }
 
-pub fn read(sock: tokio_core::net::TcpStream) -> Box<Future<Item=(tokio_core::net::TcpStream, Vec<u8>), Error=io::Error>> {
+pub fn read(sock: tokio_core::net::TcpStream) -> Box<Future<Item=(TcpStream, Vec<u8>), Error=io::Error>> {
     let mut buf = vec![0u8; 2];
     Box::new(tokio::io::read_exact(sock, buf).and_then(|sock| {
         tokio::io::read_exact(sock.0, vec![0u8; sock.1[1] as usize])
     }))
 }
 
-pub fn write(sock: tokio_core::net::TcpStream, buf: Vec<u8>, len: usize) -> Box<Future<Item=(tokio_core::net::TcpStream, Vec<u8>), Error=io::Error>> {
+pub fn write(sock: TcpStream, buf: Vec<u8>, len: usize) -> Box<Future<Item=(TcpStream, Vec<u8>), Error=io::Error>> {
     let mut msg_len_buf = vec![(len >> 8) as u8, (len & 0xff) as u8];
     let buf = &buf[0..len];
     msg_len_buf.extend_from_slice(buf);
