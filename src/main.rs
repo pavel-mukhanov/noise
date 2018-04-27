@@ -1,3 +1,4 @@
+extern crate byteorder;
 extern crate bytes;
 extern crate clap;
 extern crate futures;
@@ -7,19 +8,32 @@ extern crate snow;
 extern crate tokio;
 extern crate tokio_core;
 extern crate tokio_io;
+extern crate tokio_service;
 
-use futures::{Future, Poll, Stream};
-use tokio::prelude::*;
-use tokio::io::copy;
-use tokio_io::AsyncRead;
-use bytes::BytesMut;
-use tokio_core::reactor::Core;
-use tokio_core::net::TcpStream;
-use tokio::net::TcpListener;
 use clap::App;
-use snow::{Error, NoiseBuilder};
+use futures::future::Future;
+use futures::Sink;
+use futures::Stream;
+use snow::NoiseBuilder;
 use snow::params::NoiseParams;
-use tokio_io::codec::LinesCodec;
+use std::io::{self, Read, Write};
+use std::net::SocketAddr;
+use std::error::Error as StdError;
+use std::thread;
+use tokio::prelude::future::ok;
+use tokio_core::{reactor::Core, net::{TcpStream, TcpListener}};
+use tokio_io::{AsyncRead, codec::LinesCodec};
+use std::time::SystemTime;
+use noise_codec::MessageCodec;
+use tokio_service::{Service, NewService};
+use tokio::io::WriteAll;
+use tokio::io::ReadExact;
+use futures::stream::AndThen;
+use tokio::executor::current_thread;
+use tokio_io::codec::Framed;
+
+mod noise_codec;
+mod noise;
 
 static SECRET: &'static [u8] = b"i don't care for fidget spinners";
 lazy_static! {
@@ -27,61 +41,49 @@ lazy_static! {
 }
 
 fn main() {
-    let matches = App::new("noise")
+    let matches = App::new("simple")
         .args_from_usage("-s --server 'Server mode'")
         .get_matches();
 
     if matches.is_present("server") {
         run_server();
     } else {
-        run_client();
+        let socket_addr = "127.0.0.1:9999".parse().unwrap();
+        send_message("", &socket_addr);
     }
+    println!("all done.");
 }
 
-fn run_server() -> Result<(), Error> {
-    let addr = "127.0.0.1:12345".parse().unwrap();
-    let listener = TcpListener::bind(&addr).expect("unable to bind TCP listener");
-
-    // Pull out a stream of sockets for incoming connections
-    let server = listener
-        .incoming()
-        .for_each(|sock| {
-            let (writer, reader) = sock.framed(LinesCodec::new()).split();
-
-
-            Ok(())
-        })
-        .map_err(|e| eprintln!("accept failed = {:?}", e));
-
-    // Start the Tokio runtime
-    tokio::run(server);
-    Ok(())
-}
-
-//fn server_handshake(reader:
-
-fn run_client() {
+fn run_server() {
     let mut buf = vec![0u8; 65535];
 
-    // Initialize our initiator NoiseSession using a builder.
-    let builder: NoiseBuilder = NoiseBuilder::new(PARAMS.clone());
-    let static_key = builder.generate_private_key().unwrap();
-    let mut noise = builder
-        .local_private_key(&static_key)
-        .psk(3, SECRET)
-        .build_initiator()
-        .unwrap();
-
-    let addr = "127.0.0.1:12345".parse().unwrap();
     let mut core = Core::new().unwrap();
     let handle = core.handle();
-    // Connect to our server, which is hopefully listening.
-    let mut stream = TcpStream::connect(&addr, &handle)
-        .and_then(|socket| {
-            let (writer, reader) = socket.framed(LinesCodec::new()).split();
+    let remote = core.remote();
+
+    let fut_stream = TcpListener::bind(&"127.0.0.1:9999".parse().unwrap(), &handle).unwrap();
+    let fut = fut_stream.incoming()
+        .map_err(|e| println!("failed to accept socket; error = {:?}", e))
+        .for_each(|sock| {
+            let reader = noise::noise_reader(sock.0);
+            handle.spawn(reader);
+
             Ok(())
-        })
-        .map_err(|e| eprintln!("Error: {}", e));
+        });
+
+    core.run(fut);
+    println!("connection closed.");
+}
+
+fn send_message(message: &str, addr: &SocketAddr) {
+    let mut core = Core::new().unwrap();
+    let handle = core.handle();
+
+    let mut stream = tokio_core::net::TcpStream::connect(&addr, &handle)
+        .and_then(|sock| {
+            noise::noise_writer(sock)
+        });
 
     core.run(stream).unwrap();
 }
+

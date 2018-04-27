@@ -2,7 +2,6 @@ extern crate byteorder;
 extern crate bytes;
 extern crate clap;
 extern crate futures;
-#[macro_use]
 extern crate lazy_static;
 extern crate snow;
 extern crate tokio;
@@ -24,68 +23,21 @@ use tokio::prelude::future::ok;
 use tokio_core::{reactor::Core, net::{TcpStream, TcpListener}};
 use tokio_io::{AsyncRead, codec::LinesCodec};
 use std::time::SystemTime;
-use codec::MessageCodec;
+use noise_codec::MessageCodec;
 use tokio_service::{Service, NewService};
 use tokio::io::WriteAll;
 use tokio::io::ReadExact;
 use futures::stream::AndThen;
 use tokio::executor::current_thread;
+use tokio_io::codec::Framed;
 
-mod codec;
-
-static SECRET: &'static [u8] = b"i don't care for fidget spinners";
+//static SECRET: &'static [u8] = b"i don't care for fidget spinners";
+static SECRET: &'static [u8] = b"secret secret secret key secrets";
 lazy_static! {
     static ref PARAMS: NoiseParams = "Noise_XXpsk3_25519_ChaChaPoly_BLAKE2s".parse().unwrap();
 }
 
-fn main() {
-    let matches = App::new("simple")
-        .args_from_usage("-s --server 'Server mode'")
-        .get_matches();
-
-    if matches.is_present("server") {
-        run_server();
-    } else {
-        let socket_addr = "127.0.0.1:9999".parse().unwrap();
-        send_message("", &socket_addr);
-    }
-    println!("all done.");
-}
-
-fn run_server() {
-    let mut buf = vec![0u8; 65535];
-
-    let mut core = Core::new().unwrap();
-    let handle = core.handle();
-    let remote = core.remote();
-
-    let fut_stream = TcpListener::bind(&"127.0.0.1:9999".parse().unwrap(), &handle).unwrap();
-    let fut = fut_stream.incoming()
-        .map_err(|e| println!("failed to accept socket; error = {:?}", e))
-        .for_each(|sock| {
-            let reader = noise_reader(sock.0);
-            handle.spawn(reader);
-
-            Ok(())
-        });
-
-    core.run(fut);
-    println!("connection closed.");
-}
-
-fn send_message(message: &str, addr: &SocketAddr) {
-    let mut core = Core::new().unwrap();
-    let handle = core.handle();
-
-    let mut stream = tokio_core::net::TcpStream::connect(&addr, &handle)
-        .and_then(|sock| {
-            noise_writer(sock)
-        });
-
-    core.run(stream).unwrap();
-}
-
-fn noise_reader(stream: TcpStream) -> Box<Future<Item=(), Error=()>> {
+pub fn handshake_listen(stream: TcpStream) -> Box<Future<Item=Framed<TcpStream, MessageCodec>, Error=io::Error>> {
     let builder: NoiseBuilder = NoiseBuilder::new(PARAMS.clone());
     let static_key = builder.generate_private_key().unwrap();
     let mut noise = builder
@@ -94,12 +46,9 @@ fn noise_reader(stream: TcpStream) -> Box<Future<Item=(), Error=()>> {
         .build_responder()
         .unwrap();
 
-    let reader = read(stream)
+    let framed = read(stream)
         .and_then(move |s| {
             let mut buf = vec![0u8; 65535];
-
-            println!("READING MESSAGE");
-
             // <- e
             noise
                 .read_message(&s.1, &mut buf);
@@ -119,32 +68,15 @@ fn noise_reader(stream: TcpStream) -> Box<Future<Item=(), Error=()>> {
                         .unwrap();
 
                     let mut noise = noise.into_transport_mode().unwrap();
-
-                    let (sink, stream) =
-                        s.0.framed(MessageCodec::new(noise)).split();
-
-                    let conn = stream.for_each(|msg| {
-                        println!("Got a message from client {:?}", msg);
-                        Ok(())
-                    })
-                    .map_err(log_error)
-                        .then(|s| {
-                            Ok(())
-                        });
-
-                    current_thread::spawn(conn);
-
-                    Ok(())
+                    let framed = s.0.framed(MessageCodec::new(noise));
+                    Ok(framed)
                 })
-        })
-        .then(|x| {
-            Ok(())
         });
 
-    Box::new(reader)
+    Box::new(framed)
 }
 
-fn noise_writer(stream: TcpStream) -> Box<Future<Item=(), Error=io::Error>> {
+pub fn handshake_sender(stream: TcpStream) -> Box<Future<Item=Framed<TcpStream, MessageCodec>, Error=io::Error>> {
     let builder: NoiseBuilder = NoiseBuilder::new(PARAMS.clone());
     let static_key = builder.generate_private_key().unwrap();
     let mut noise = builder
@@ -157,7 +89,7 @@ fn noise_writer(stream: TcpStream) -> Box<Future<Item=(), Error=io::Error>> {
     let mut buf = vec![0u8; 65535];
     // -> e
     let len = noise.write_message(&[], &mut buf).unwrap();
-    let writer
+    let framed
     = write(stream, buf, len)
         .and_then(|sock| {
             read(sock.0)
@@ -175,20 +107,61 @@ fn noise_writer(stream: TcpStream) -> Box<Future<Item=(), Error=io::Error>> {
             write(sock.0, Vec::from(buf), len)
                 .and_then(|sock| {
                     let mut noise = noise.into_transport_mode().unwrap();
-                    let (sink, stream) =
-                        sock.0.framed(MessageCodec::new(noise)).split();
-                    sink.send(String::from("REALLY IMPORTANT ENCRYPTED MESSAGE"))
-                        .and_then(|sink| {
-                            sink.send(String::from("SECOND REALLY IMPORTANT ENCRYPTED MESSAGE"))
-                        })
-                        .and_then(|sink| {
-                            sink.send(String::from("THIRD REALLY IMPORTANT ENCRYPTED MESSAGE"))
-                        })
+                    let framed = sock.0.framed(MessageCodec::new(noise));
+                    Ok(framed)
+                })
+        });
+
+    Box::new(framed)
+}
+
+pub fn noise_reader(stream: TcpStream) -> Box<Future<Item=(), Error=()>> {
+    let builder: NoiseBuilder = NoiseBuilder::new(PARAMS.clone());
+    let static_key = builder.generate_private_key().unwrap();
+    let mut noise = builder
+        .local_private_key(&static_key)
+        .psk(3, SECRET)
+        .build_responder()
+        .unwrap();
+
+    let reader =
+        handshake_listen(stream)
+            .and_then(|framed| {
+                let (sink, stream) = framed.split();
+
+                let conn = stream.for_each(|msg| {
+                    println!("Got a message from client {:?}", msg);
+                    Ok(())
+                })
+                    .map_err(log_error)
+                    .then(|s| {
+                        Ok(())
+                    });
+                current_thread::spawn(conn);
+                Ok(())
+            })
+            .then(|x| {
+                Ok(())
+            });
+
+    Box::new(reader)
+}
+
+pub fn noise_writer(stream: TcpStream) -> Box<Future<Item=(), Error=io::Error>> {
+    let writer =
+        handshake_sender(stream).and_then(|framed| {
+            let (sink, stream) = framed.split();
+            sink.send(String::from("REALLY IMPORTANT ENCRYPTED MESSAGE"))
+                .and_then(|sink| {
+                    sink.send(String::from("SECOND REALLY IMPORTANT ENCRYPTED MESSAGE"))
+                })
+                .and_then(|sink| {
+                    sink.send(String::from("THIRD REALLY IMPORTANT ENCRYPTED MESSAGE"))
                 })
         })
-        .then(|x| {
-            Ok(())
-        });
+            .then(|x| {
+                Ok(())
+            });
     Box::new(writer)
 }
 
