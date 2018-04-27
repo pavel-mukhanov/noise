@@ -33,6 +33,7 @@ impl Decoder for MessageCodec {
         let data = buf.split_to(len + 2).to_vec();
         let data = &data[2..];
         let mut read_to = vec![0u8; len];
+        println!("data {:?}", data);
         let len = self.session.read_message(data, &mut read_to).unwrap();
         let res = String::from_utf8_lossy(&read_to[..len]);
         Ok(Some(res.to_string()))

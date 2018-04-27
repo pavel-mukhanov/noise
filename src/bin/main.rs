@@ -2,22 +2,18 @@ extern crate byteorder;
 extern crate bytes;
 extern crate clap;
 extern crate futures;
-#[macro_use]
-extern crate lazy_static;
 extern crate snow;
 extern crate tokio;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_service;
+extern crate noise;
 
 use clap::App;
 use futures::future::Future;
 use futures::Stream;
 use std::net::SocketAddr;
 use tokio_core::{reactor::Core, net::TcpListener};
-
-mod noise_codec;
-mod noise;
 
 fn main() {
     let matches = App::new("simple")

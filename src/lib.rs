@@ -2,6 +2,7 @@ extern crate byteorder;
 extern crate bytes;
 extern crate clap;
 extern crate futures;
+#[macro_use]
 extern crate lazy_static;
 extern crate snow;
 extern crate tokio;
@@ -22,6 +23,8 @@ use std::time::SystemTime;
 use noise_codec::MessageCodec;
 use tokio::executor::current_thread;
 use tokio_io::codec::Framed;
+
+pub mod noise_codec;
 
 static SECRET: &'static [u8] = b"secret secret secret key secrets";
 lazy_static! {
