@@ -20,7 +20,7 @@ use std::io;
 use tokio_core::net::TcpStream;
 use tokio_io::AsyncRead;
 use std::time::SystemTime;
-use noise_codec::MessageCodec;
+use noise_codec::NoiseCodec;
 use tokio::executor::current_thread;
 use tokio_io::codec::Framed;
 
@@ -33,7 +33,7 @@ lazy_static! {
 
 pub fn handshake_listen(
     stream: TcpStream,
-) -> Box<Future<Item = Framed<TcpStream, MessageCodec>, Error = io::Error>> {
+) -> Box<Future<Item = Framed<TcpStream, NoiseCodec>, Error = io::Error>> {
     let builder: NoiseBuilder = NoiseBuilder::new(PARAMS.clone());
     let static_key = builder.generate_private_key().unwrap();
     let mut noise = builder
@@ -58,7 +58,7 @@ pub fn handshake_listen(
                 noise.read_message(&readed_buf, &mut buf).unwrap();
 
                 let noise = noise.into_transport_mode().unwrap();
-                let framed = s.0.framed(MessageCodec::new(noise));
+                let framed = s.0.framed(NoiseCodec::new(noise));
                 Ok(framed)
             },
         )
@@ -69,7 +69,7 @@ pub fn handshake_listen(
 
 pub fn handshake_sender(
     stream: TcpStream,
-) -> Box<Future<Item = Framed<TcpStream, MessageCodec>, Error = io::Error>> {
+) -> Box<Future<Item = Framed<TcpStream, NoiseCodec>, Error = io::Error>> {
     let builder: NoiseBuilder = NoiseBuilder::new(PARAMS.clone());
     let static_key = builder.generate_private_key().unwrap();
     let mut noise = builder
@@ -94,7 +94,7 @@ pub fn handshake_sender(
             let buf = &buf[0..len];
             write(sock.0, Vec::from(buf), len).and_then(|sock| {
                 let noise = noise.into_transport_mode().unwrap();
-                let framed = sock.0.framed(MessageCodec::new(noise));
+                let framed = sock.0.framed(NoiseCodec::new(noise));
                 Ok(framed)
             })
         });

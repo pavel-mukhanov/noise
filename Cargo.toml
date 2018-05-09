@@ -29,6 +29,7 @@ clap = "2.31.2"
 lazy_static = "1.0.0"
 bytes = "0.4.6"
 tokio-service = "0.1"
+exonum = { version = "0.7.0", path = "../exonum/exonum" }
 
 
 [dev-dependencies]

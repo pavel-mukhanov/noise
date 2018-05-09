@@ -1,26 +1,25 @@
+use byteorder::{BigEndian,LittleEndian, ByteOrder};
 use bytes::BytesMut;
-use byteorder::{ByteOrder, BigEndian};
-use tokio_io::codec::{Decoder, Encoder};
 use snow::Session;
-
 use std::io;
+use tokio_io::codec::{Decoder, Encoder};
 
 #[allow(dead_code)]
-pub struct MessageCodec {
+pub struct NoiseCodec {
     max_message_len: u32,
     session: Session,
 }
 
-impl MessageCodec {
+impl NoiseCodec {
     pub fn new(session: Session) -> Self {
-        MessageCodec {
+        NoiseCodec {
             max_message_len: 1024,
             session,
         }
     }
 }
 
-impl Decoder for MessageCodec {
+impl Decoder for NoiseCodec {
     type Item = String;
     type Error = io::Error;
 
@@ -29,32 +28,49 @@ impl Decoder for MessageCodec {
             return Ok(None);
         };
 
-        let len = BigEndian::read_u16(buf) as usize;
-        let data = buf.split_to(len + 2).to_vec();
-        let data = &data[2..];
-        let mut read_to = vec![0u8; len];
-        println!("data {:?}", data);
-        let len = self.session.read_message(data, &mut read_to).unwrap();
-        let res = String::from_utf8_lossy(&read_to[..len]);
+        let len = LittleEndian::read_u32(buf) as usize;
+        println!("message len {}", len);
+
+        let data = buf.split_to(len + 4).to_vec();
+        let data = &data[4..];
+        let mut readed_data = vec![0u8; 0];
+        let mut readed_len = 0usize;
+
+        data.chunks(65535).for_each(|chunk| {
+            let mut read_to = vec![0u8; chunk.len()];
+            println!("chunk len {:?}", chunk.len());
+            readed_len += self.session.read_message(chunk, &mut read_to).unwrap();
+            readed_data.extend_from_slice(&read_to);
+        });
+
+        let res = String::from_utf8_lossy(&readed_data[..readed_len]);
         Ok(Some(res.to_string()))
     }
 }
 
-impl Encoder for MessageCodec {
+impl Encoder for NoiseCodec {
     type Item = String;
     type Error = io::Error;
 
     fn encode(&mut self, msg: Self::Item, buf: &mut BytesMut) -> io::Result<()> {
-        let mut tmp_buf = vec![0u8; 65535];
-        let len = self.session
-            .write_message(msg.as_bytes(), &mut tmp_buf)
-            .unwrap();
-        let mut msg_len_buf = vec![(len >> 8) as u8, (len & 0xff) as u8];
-        let tmp_buf = &tmp_buf[0..len];
-        msg_len_buf.extend_from_slice(tmp_buf);
+        let mut len = 0usize;
 
-        println!("sending to socket {:?}", msg_len_buf);
+        let mut write_to_buf = vec![0u8; 0];
 
+        msg.as_bytes().chunks(65535 - 16).for_each(|chunk| {
+            let mut tmp_buf = vec![0u8; 65535];
+            len += self.session
+                .write_message( chunk,&mut tmp_buf)
+                .unwrap();
+            println!("written_bytes {:?}", len);
+            write_to_buf.extend_from_slice(&tmp_buf);
+        });
+
+        println!("sending to socket len {}", len);
+        let mut msg_len_buf = vec![0u8; 4];
+        LittleEndian::write_u32(&mut msg_len_buf, len as u32);
+        let write_to_buf = &write_to_buf[0..len];
+        msg_len_buf.extend_from_slice(write_to_buf);
         buf.extend_from_slice(&msg_len_buf);
         Ok(())
     }

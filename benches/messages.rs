@@ -5,6 +5,7 @@ extern crate noise;
 extern crate snow;
 extern crate bytes;
 extern crate tokio_io;
+extern crate exonum;
 
 use tokio_io::codec::{Encoder, Decoder};
 use bytes::{BytesMut, BufMut};
@@ -14,7 +15,10 @@ use snow::types::*;
 use snow::wrappers::crypto_wrapper::Dh25519;
 use snow::wrappers::rand_wrapper::RandomOs;
 
-use noise::noise_codec::MessageCodec;
+use noise::noise_codec::NoiseCodec;
+
+use exonum::events::codec::MessagesCodec;
+use exonum::messages::RawMessage;
 
 pub fn add_two(a: i32) -> i32 {
     a + 2
@@ -69,13 +73,26 @@ mod tests {
         let h_i = h_i.into_transport_mode().unwrap();
         let h_r = h_r.into_transport_mode().unwrap();
         let mut buf = BytesMut::with_capacity(MSG_SIZE * 2);
-        let mut codec_i = MessageCodec::new(h_i);
-        let mut codec_r = MessageCodec::new(h_r);
+        let mut codec_i = NoiseCodec::new(h_i);
+        let mut codec_r = NoiseCodec::new(h_r);
         let s = "secret message";
 
         b.iter(move || {
             codec_i.encode(s.to_string(), &mut buf);
             codec_r.decode(&mut buf);
+        });
+    }
+
+    #[bench]
+    fn test_encode_decode_raw_message(b: &mut Bencher) {
+        let mut codec = MessagesCodec::new(MSG_SIZE as u32);
+        let mut buf = BytesMut::with_capacity(MSG_SIZE * 2);
+
+        b.iter(move || {
+            let mut message = vec![0; MSG_SIZE];
+            let mut raw_message = RawMessage::from_vec(message);
+            codec.encode(raw_message, &mut buf);
+            codec.decode(&mut buf);
         });
     }
 }
