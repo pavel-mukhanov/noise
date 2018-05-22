@@ -3,23 +3,24 @@ use bytes::BytesMut;
 use snow::Session;
 use std::io;
 use tokio_io::codec::{Decoder, Encoder};
+use wrapper::NoiseWrapper;
 
 #[allow(dead_code)]
-pub struct NoiseCodec {
+pub struct MessagesCodec {
     max_message_len: u32,
-    session: Session,
+    session: NoiseWrapper,
 }
 
-impl NoiseCodec {
-    pub fn new(session: Session) -> Self {
-        NoiseCodec {
+impl MessagesCodec {
+    pub fn new(session: NoiseWrapper) -> Self {
+        MessagesCodec {
             max_message_len: 1024,
             session,
         }
     }
 }
 
-impl Decoder for NoiseCodec {
+impl Decoder for MessagesCodec {
     type Item = String;
     type Error = io::Error;
 
@@ -39,7 +40,7 @@ impl Decoder for NoiseCodec {
         data.chunks(65535).for_each(|chunk| {
             let mut read_to = vec![0u8; chunk.len()];
             println!("chunk len {:?}", chunk.len());
-            readed_len += self.session.read_message(chunk, &mut read_to).unwrap();
+//            readed_len += self.session.read(chunk, &mut read_to).unwrap();
             readed_data.extend_from_slice(&read_to);
         });
 
@@ -48,7 +49,7 @@ impl Decoder for NoiseCodec {
     }
 }
 
-impl Encoder for NoiseCodec {
+impl Encoder for MessagesCodec {
     type Item = String;
     type Error = io::Error;
 
@@ -59,9 +60,9 @@ impl Encoder for NoiseCodec {
 
         msg.as_bytes().chunks(65535 - 16).for_each(|chunk| {
             let mut tmp_buf = vec![0u8; 65535];
-            len += self.session
-                .write_message( chunk,&mut tmp_buf)
-                .unwrap();
+//            len += self.session
+//                .write_message( chunk,&mut tmp_buf)
+//                .unwrap();
             println!("written_bytes {:?}", len);
             write_to_buf.extend_from_slice(&tmp_buf);
         });

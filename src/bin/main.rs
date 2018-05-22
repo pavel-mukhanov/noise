@@ -37,8 +37,9 @@ fn run_server() {
     let fut = fut_stream.incoming()
         .map_err(|e| println!("failed to accept socket; error = {:?}", e))
         .for_each(|sock| {
-            let reader = noise::noise_reader(sock.0);
-            handle.spawn(reader);
+//            let handshake = NoiseHandshake {};
+//            let reader = handshake.listen(sock.0);
+//            handle.spawn(reader);
 
             Ok(())
         });
@@ -53,7 +54,9 @@ fn send_message(_message: &str, addr: &SocketAddr) {
 
     let stream = tokio_core::net::TcpStream::connect(&addr, &handle)
         .and_then(|sock| {
-            noise::noise_writer(sock)
+//            let handshake = NoiseHandshake {};
+//            handshake.send(sock.0)
+            Ok(())
         });
 
     core.run(stream).unwrap();
