@@ -24,6 +24,8 @@ pub const NOISE_MAX_MESSAGE_LENGTH: usize = 65_535;
 pub const TAG_LENGTH: usize = 16;
 pub const NOISE_HEADER_LENGTH: usize = 4;
 pub const HANDSHAKE_HEADER_LENGTH: usize = 2;
+pub const NOISE_MAX_HANDSHAKE_MESSAGE_LENGTH: usize = 97;
+pub const NOISE_MIN_HANDSHAKE_MESSAGE_LENGTH: usize = 32;
 
 // We choose XX pattern since it provides mutual authentication and
 // transmission of static public keys.
@@ -65,6 +67,12 @@ impl NoiseWrapper {
     }
 
     pub fn read_handshake_msg(&mut self, input: &[u8]) -> Result<(usize, Vec<u8>), NoiseError> {
+        info!("input len {}", input.len());
+        if input.len() < NOISE_MIN_HANDSHAKE_MESSAGE_LENGTH
+            || input.len() > NOISE_MAX_HANDSHAKE_MESSAGE_LENGTH  {
+            return Err(NoiseError::new("Wrong handshake message length"))
+        }
+
         self.read(input, NOISE_MAX_MESSAGE_LENGTH)
     }
 
@@ -140,6 +148,11 @@ impl NoiseWrapper {
     fn read(&mut self, input: &[u8], len: usize) -> Result<(usize, Vec<u8>), NoiseError> {
         let mut buf = vec![0u8; len];
         info!("input.len() {}, len {}", input.len(), len);
+
+        if input.is_empty() {
+            return Err(NoiseError::new("Received empty message"));
+        }
+
         let len = self.session
             .read_message(input, &mut buf)
             .map_err(|e| NoiseError::new(format!("Error while reading noise message: {:?}", e.0)))?;
