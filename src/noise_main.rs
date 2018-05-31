@@ -118,9 +118,6 @@ mod tests {
     use byteorder::{ByteOrder, LittleEndian};
     use env_logger;
     use futures::{done, Future, Stream};
-    use futures::unsync;
-    use futures::unsync::oneshot::Receiver;
-    use futures::unsync::oneshot::Sender;
     use noise_codec::MessagesCodec;
     use noise_main::HandshakeResult;
     use noise_main::NoiseHandshake;
@@ -145,10 +142,15 @@ mod tests {
     use wrapper::NoiseError;
     use wrapper::NoiseWrapper;
     use wrapper::NOISE_MIN_HANDSHAKE_MESSAGE_LENGTH;
-    use wrapper::NOISE_MAX_HANDSHAKE_MESSAGE_LENGTH;
+    use wrapper::NOISE_MAX_MESSAGE_LENGTH;
+    use futures::Sink;
+    use tokio;
+    use std::sync::Mutex;
+    use std::sync::mpsc::{self, Sender};
+    use std::time::Duration;
 
     #[derive(Debug, PartialEq, Copy, Clone)]
-    pub enum Step {
+    pub enum HandshakeStep {
         Normal,
         One(u8, usize),
         Two(u8, usize),
@@ -156,72 +158,122 @@ mod tests {
 
     const EMPTY_MESSAGE: usize = 0;
     const SMALL_MESSAGE: usize = NOISE_MIN_HANDSHAKE_MESSAGE_LENGTH - 1;
-    const BIG_MESSAGE: usize = NOISE_MAX_HANDSHAKE_MESSAGE_LENGTH + 1;
+    const BIG_MESSAGE: usize = NOISE_MAX_MESSAGE_LENGTH + 1;
 
     #[test]
     fn test_noise_normal_handshake() {
-        let addr: SocketAddr = "127.0.0.1:5001".parse().unwrap();
+        let addr: SocketAddr = "127.0.0.1:45001".parse().unwrap();
         let addr2 = addr.clone();
 
+        let (sender, receiver) = mpsc::channel();
+
         thread::spawn(move || {
-            run_handshake_listener(&addr2, Step::Normal)
+            run_handshake_listener(&addr2, HandshakeStep::Normal, sender.clone());
         });
 
-        let res = send_handshake(&addr, Step::Normal);
+        connect(&addr);
+        let res = send_handshake(&addr, HandshakeStep::Normal);
         assert!(res.is_ok());
     }
 
     #[test]
+    fn test_noise_normal_handshake_remote() {
+        env_logger::init();
+
+        let params = HandshakeParams {
+            max_message_len: 1024,
+        };
+
+        let mut core = Core::new().unwrap();
+        let handle = core.handle();
+
+        let addr: SocketAddr = "127.0.0.1:8000".parse().unwrap();
+
+        let handle_cloned = handle.clone();
+
+        let fut_stream = TcpListener::bind(&addr, &handle_cloned).unwrap();
+        let fut = fut_stream.incoming()
+            .for_each(move |(stream, _)| {
+                Ok(())
+            })
+            .map_err(log_error);
+
+        handle.spawn(fut);
+
+        let stream = TcpStream::connect(&addr, &handle_cloned);
+        let res =  core.run(stream);
+    }
+
+    #[test]
     fn test_noise_bad_handshake() {
-        let addr:SocketAddr  = "127.0.0.1:5002".parse().unwrap();
+        let addr: SocketAddr = "127.0.0.1:45002".parse().unwrap();
         let addr2 = addr.clone();
 
+        let (sender, receiver) = mpsc::channel();
+
         thread::spawn(move || {
-            run_handshake_listener(&addr2, Step::Normal)
+            run_handshake_listener(&addr2, HandshakeStep::Normal, sender)
         });
 
-        let res = send_handshake(&addr, Step::One(1, EMPTY_MESSAGE));
+        connect(&addr);
+
+        let res = send_handshake(&addr, HandshakeStep::One(1, EMPTY_MESSAGE));
         assert!(res.is_err());
 
-        let res = send_handshake(&addr, Step::Two(2, EMPTY_MESSAGE));
+        let res = send_handshake(&addr, HandshakeStep::Two(2, EMPTY_MESSAGE));
         assert!(res.is_err());
 
-        let res = send_handshake(&addr, Step::One(1, SMALL_MESSAGE));
+        let res = send_handshake(&addr, HandshakeStep::One(1, SMALL_MESSAGE));
         assert!(res.is_err());
 
-        let res = send_handshake(&addr, Step::Two(2, SMALL_MESSAGE));
+        let res = send_handshake(&addr, HandshakeStep::Two(2, SMALL_MESSAGE));
         assert!(res.is_err());
 
-        let res = send_handshake(&addr, Step::One(1, BIG_MESSAGE));
+        let res = send_handshake(&addr, HandshakeStep::One(1, BIG_MESSAGE));
         assert!(res.is_err());
 
-        let res = send_handshake(&addr, Step::Two(2, BIG_MESSAGE));
+        let res = send_handshake(&addr, HandshakeStep::Two(2, BIG_MESSAGE));
         assert!(res.is_err());
     }
 
     #[test]
+    #[ignore]
     fn test_noise_bad_listen() {
         env_logger::init();
-        test_noise_bad_listener(&"127.0.0.1:5003".parse().unwrap(), EMPTY_MESSAGE);
-        test_noise_bad_listener(&"127.0.0.1:5004".parse().unwrap(), SMALL_MESSAGE);
-        test_noise_bad_listener(&"127.0.0.1:5005".parse().unwrap(), BIG_MESSAGE);
+        test_noise_bad_listener(&"127.0.0.1:45003".parse().unwrap(), EMPTY_MESSAGE);
+        test_noise_bad_listener(&"127.0.0.1:45004".parse().unwrap(), EMPTY_MESSAGE);
+//        test_noise_bad_listener(&"127.0.0.1:45004".parse().unwrap(), EMPTY_MESSAGE);
     }
 
     fn test_noise_bad_listener(addr: &SocketAddr, message_size: usize) {
         let addr2 = addr.clone();
 
+        let (sender, receiver) = mpsc::channel();
+
         thread::spawn(move || {
-            run_handshake_listener(&addr2, Step::One(1, message_size))
+            run_handshake_listener(&addr2, HandshakeStep::One(1, message_size), sender)
         });
 
-        let res = send_handshake(&addr, Step::Normal);
+        info!("connect");
+        connect(&addr);
+        receiver.recv().unwrap();
+
+        let res = send_handshake(&addr, HandshakeStep::Normal);
         assert!(res.is_err());
     }
 
-    fn run_handshake_listener(addr: &SocketAddr, step: Step) -> Result<(), io::Error> {
+    fn connect(addr: &SocketAddr) {
         let mut core = Core::new().unwrap();
         let handle = core.handle();
 
+        let stream = TcpStream::connect(&addr, &handle);
+
+        core.run(stream);
+    }
+
+    fn run_handshake_listener(addr: &SocketAddr, step: HandshakeStep, sender: Sender<()>) -> Result<(), io::Error> {
+        let mut core = Core::new().unwrap();
+        let handle = core.handle();
         let params = HandshakeParams {
             max_message_len: 1024,
         };
@@ -229,21 +281,29 @@ mod tests {
         let fut_stream = TcpListener::bind(addr, &handle).unwrap();
         let fut = fut_stream.incoming()
             .for_each(|(stream, _)| {
-                let reader =
-                    listen_bad_handshake(stream, &params, step)
-                        .and_then(|framed| {
-                            Ok(())
-                        }).map_err(log_error);
+                info!("connected");
+                sender.send(());
+
+                let handshake = match step {
+                    HandshakeStep::Normal => NoiseHandshake::listen(&params, stream),
+                    _ => listen_bad_handshake(stream, &params, step),
+                };
+
+                let reader = handshake.and_then(|framed| {
+                    Ok(())
+                })
+                    .map_err(log_error);
 
                 handle.spawn(reader);
                 Ok(())
             })
             .map_err(into_other);
 
+
         core.run(fut)
     }
 
-    fn send_handshake(addr: &SocketAddr, step: Step) -> Result<(), io::Error> {
+    fn send_handshake(addr: &SocketAddr, step: HandshakeStep) -> Result<(), io::Error> {
         let mut core = Core::new().unwrap();
         let handle = core.handle();
 
@@ -253,7 +313,10 @@ mod tests {
 
         let stream = TcpStream::connect(&addr, &handle)
             .and_then(|sock| {
-                send_bad_handshake(&params, sock, step)
+                match step {
+                    HandshakeStep::Normal => NoiseHandshake::send(&params, sock),
+                    _ => send_bad_handshake(&params, sock, step)
+                }
             })
             .map(|_| {
                 ()
@@ -263,19 +326,7 @@ mod tests {
         core.run(stream)
     }
 
-    pub fn log_error<E: StdError>(err: E) {
-        error!("An error occurred: {}", err)
-    }
-
-    pub fn other_error<S: AsRef<str>>(s: S) -> io::Error {
-        io::Error::new(io::ErrorKind::Other, s.as_ref())
-    }
-
-    pub fn into_other<E: StdError>(err: E) -> io::Error {
-        other_error(&format!("An error occurred, {}", err.description()))
-    }
-
-    fn send_bad_handshake(params: &HandshakeParams, stream: TcpStream, step: Step) -> HandshakeResult {
+    fn send_bad_handshake(params: &HandshakeParams, stream: TcpStream, step: HandshakeStep) -> HandshakeResult {
         let max_message_len = params.max_message_len;
         let mut noise = NoiseWrapper::initiator(params);
         let framed
@@ -298,7 +349,7 @@ mod tests {
         Box::new(framed)
     }
 
-    fn listen_bad_handshake(stream: TcpStream, params: &HandshakeParams, step: Step) -> HandshakeResult {
+    fn listen_bad_handshake(stream: TcpStream, params: &HandshakeParams, step: HandshakeStep) -> HandshakeResult {
         let max_message_len = params.max_message_len;
         let mut noise = NoiseWrapper::responder(params);
         let framed = read(stream).and_then(move |(stream, msg)| {
@@ -322,16 +373,28 @@ mod tests {
     pub fn write_bad_handshake_msg(
         noise: &mut NoiseWrapper,
         current_step: u8,
-        step: &Step,
+        step: &HandshakeStep,
     ) -> Box<Future<Item=(usize, Vec<u8>), Error=io::Error>> {
         let res = match step {
-            Step::One(cs, size) | Step::Two(cs, size) if *cs == current_step => {
+            HandshakeStep::One(cs, size) | HandshakeStep::Two(cs, size) if *cs == current_step => {
                 Ok((*size, vec![0; *size]))
             }
             _ => noise.write_handshake_msg()
         };
 
         Box::new(done(res.map_err(|e| e.into())))
+    }
+
+    pub fn log_error<E: StdError>(err: E) {
+        error!("An error occurred: {}", err)
+    }
+
+    pub fn other_error<S: AsRef<str>>(s: S) -> io::Error {
+        io::Error::new(io::ErrorKind::Other, s.as_ref())
+    }
+
+    pub fn into_other<E: StdError>(err: E) -> io::Error {
+        other_error(&format!("An error occurred, {}", err.description()))
     }
 }
 

@@ -24,7 +24,6 @@ pub const NOISE_MAX_MESSAGE_LENGTH: usize = 65_535;
 pub const TAG_LENGTH: usize = 16;
 pub const NOISE_HEADER_LENGTH: usize = 4;
 pub const HANDSHAKE_HEADER_LENGTH: usize = 2;
-pub const NOISE_MAX_HANDSHAKE_MESSAGE_LENGTH: usize = 97;
 pub const NOISE_MIN_HANDSHAKE_MESSAGE_LENGTH: usize = 32;
 
 // We choose XX pattern since it provides mutual authentication and
@@ -69,7 +68,7 @@ impl NoiseWrapper {
     pub fn read_handshake_msg(&mut self, input: &[u8]) -> Result<(usize, Vec<u8>), NoiseError> {
         info!("input len {}", input.len());
         if input.len() < NOISE_MIN_HANDSHAKE_MESSAGE_LENGTH
-            || input.len() > NOISE_MAX_HANDSHAKE_MESSAGE_LENGTH  {
+            || input.len() > NOISE_MAX_MESSAGE_LENGTH  {
             return Err(NoiseError::new("Wrong handshake message length"))
         }
 

@@ -18,6 +18,8 @@ extern crate env_logger;
 
 #[macro_use]
 extern crate log;
+extern crate exonum_sodiumoxide as sodiumoxide;
+extern crate rand;
 
 use futures::future::Future;
 use futures::Sink;
@@ -36,5 +38,5 @@ use tokio_io::codec::Framed;
 pub mod wrapper;
 pub mod noise_main;
 pub mod noise_codec;
-
+pub mod sodium_wrapper;
 
