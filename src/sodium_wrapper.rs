@@ -101,15 +101,16 @@ mod tests {
     use std::convert::AsMut;
     use snow::NoiseBuilder;
 
-    pub const CRYPTO_SCALARMULT_BYTES: usize = 32;
+    pub const crypto_sign_ed25519_PUBLICKEYBYTES: usize = 32;
+    pub const crypto_sign_ed25519_SECRETKEYBYTES: usize = 64;
 
     #[link(name = "sodium")]
     extern {
-        fn crypto_sign_ed25519_sk_to_curve25519(curve25519_sk: *mut [u8; CRYPTO_SCALARMULT_BYTES],
-                                                ed25519_sk: *mut [u8; CRYPTO_SCALARMULT_BYTES]);
+        fn crypto_sign_ed25519_pk_to_curve25519(curve25519_sk: *mut [u8; crypto_sign_ed25519_PUBLICKEYBYTES],
+                                                ed25519_sk: *const [u8; crypto_sign_ed25519_PUBLICKEYBYTES]);
 
-        fn crypto_sign_ed25519_pk_to_curve25519(curve25519_sk: *mut [u8; CRYPTO_SCALARMULT_BYTES],
-                                                ed25519_sk: *mut [u8; CRYPTO_SCALARMULT_BYTES]);
+        fn crypto_sign_ed25519_sk_to_curve25519(curve25519_sk: *mut [u8; crypto_sign_ed25519_PUBLICKEYBYTES],
+                                                ed25519_sk: *const [u8; crypto_sign_ed25519_PUBLICKEYBYTES]);
     }
 
     fn clone_into_array<A, T>(slice: &[T]) -> A
@@ -126,8 +127,8 @@ mod tests {
         let mut pk = clone_into_array(&pk[..]);
         let mut sk= clone_into_array(&sk[..32]);
 
-        let mut curve_pk = [0; CRYPTO_SCALARMULT_BYTES];
-        let mut curve_sk = [0; CRYPTO_SCALARMULT_BYTES];
+        let mut curve_pk = [0; crypto_sign_ed25519_PUBLICKEYBYTES];
+        let mut curve_sk = [0; crypto_sign_ed25519_PUBLICKEYBYTES];
         unsafe {
             crypto_sign_ed25519_pk_to_curve25519(&mut curve_pk, &mut pk);
             crypto_sign_ed25519_sk_to_curve25519(&mut curve_sk, &mut sk);
